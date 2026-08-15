@@ -1,0 +1,17 @@
+{
+  "id": "com.cinefy",
+  "version": "1.0.0",
+  "name": "Cinefy",
+  "description": "Cinefy channels for subscribed users",
+  "catalogs": [
+    {
+      "type": "channel",
+      "id": "cinefy_channels",
+      "name": "Cinefy - Canais",
+      "extra": []
+    }
+  ],
+  "resources": ["catalog", "meta", "stream"],
+  "types": ["channel"],
+  "idPrefixes": ["cinefy_"]
+}
