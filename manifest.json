@@ -6,6 +6,12 @@
   "catalogs": [
     {
       "type": "movie",
+      "id": "cinefy_live",
+      "name": "Cinefy - Live",
+      "extra": []
+    },
+    {
+      "type": "movie",
       "id": "cinefy_all",
       "name": "Cinefy - Tudo",
       "extra": []

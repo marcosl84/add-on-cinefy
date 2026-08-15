@@ -239,7 +239,14 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
       fetchPersonalVideoContent(token)
     ]);
 
-    const metas = [...publicItems, ...personalItems].slice(0, 120);
+    let metas = [...publicItems, ...personalItems];
+
+    if (id === "cinefy_live") {
+      metas = publicItems.filter((item) => item.raw?.liveStream || item.genre === "live");
+    }
+
+    metas = metas.slice(0, 120);
+
     return {
       metas: metas.map((meta) => ({
         id: meta.id,
@@ -418,6 +425,31 @@ app.get("/:token/manifest.json", async (req, res) => {
   };
 
   return res.json(subManifest);
+});
+
+app.get("/:token/catalog/movie/cinefy_live.json", async (req, res) => {
+  const token = decodeURIComponent(req.params.token || "");
+  const validation = await validateSession(token);
+
+  if (!validation.valid) {
+    return res.status(401).json({ metas: [] });
+  }
+
+  const publicItems = await fetchPublicVideoContent();
+  const metas = publicItems.filter((item) => item.raw?.liveStream || item.genre === "live").slice(0, 120);
+
+  return res.json({
+    metas: metas.map((meta) => ({
+      id: meta.id,
+      type: "movie",
+      name: meta.name,
+      poster: meta.poster,
+      background: meta.background,
+      description: meta.description,
+      genres: [meta.genre],
+      languages: ["pt-BR"]
+    }))
+  });
 });
 
 app.get("/:token/catalog/movie/cinefy_all.json", async (req, res) => {
