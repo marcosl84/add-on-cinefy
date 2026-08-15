@@ -29,6 +29,34 @@ function sanitizeText(value, fallback = "") {
   return String(value || fallback).replace(/\s+/g, " ").trim() || fallback;
 }
 
+function normalizeCreatorEntry(input, fallback = "Cinefy") {
+  if (!input || typeof input !== "object") return null;
+
+  const creator = input.creator || input.user || input;
+  const id = String(creator?.id || input?.id || "").trim();
+  const username = sanitizeText(creator?.username || creator?.slug || creator?.displayName || input?.slug || input?.username || "", fallback);
+  const displayName = sanitizeText(creator?.displayName || creator?.name || creator?.username || username || fallback, fallback);
+
+  return {
+    id: id || `cinefy_${String(username || Math.random()).replace(/\s+/g, "").toLowerCase()}`,
+    slug: String(creator?.slug || input?.slug || username || "").trim(),
+    name: displayName,
+    username,
+    avatar: creator?.avatar || creator?.image || creator?.logo || input?.avatar || "",
+    banner: creator?.banner || creator?.background || input?.banner || "",
+    description: sanitizeText(creator?.description || input?.description || "", "Canal Cinefy")
+  };
+}
+
+function resolveImageUrl(value, size = "w500") {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^https?:\/\//i.test(text)) return text;
+  if (/^\/\//.test(text)) return `https:${text}`;
+  if (/[A-Za-z0-9_\-]+\.(png|jpe?g|webp|gif|avif)(\?.*)?$/i.test(text)) return `https://image.tmdb.org/t/p/${size}/${text}`;
+  return text;
+}
+
 function normalizeAuthToken(rawToken) {
   const value = String(rawToken || "").trim();
   if (!value) return "";
@@ -110,6 +138,36 @@ async function validateSession(token) {
 
 async function fetchSubscribedChannels(token) {
   const authToken = normalizeAuthToken(token || CINEFY_AUTH_TOKEN);
+  const seen = new Set();
+  const channels = [];
+
+  try {
+    const validation = await validateSession(authToken);
+    const subscriptions = Array.isArray(validation?.user?.subsMetadata?.subscriptions)
+      ? validation.user.subsMetadata.subscriptions
+      : [];
+
+    for (const entry of subscriptions) {
+      const creator = normalizeCreatorEntry(entry, "Cinefy");
+      if (!creator) continue;
+      const key = String(creator.id || creator.slug || creator.name || "").toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      channels.push({
+        id: `cinefy_${String(creator.id || creator.slug || creator.name || Math.random()).trim()}`,
+        slug: String(creator.slug || creator.username || creator.name || "").trim(),
+        name: sanitizeText(creator.name || creator.username || "Cinefy Channel", "Cinefy Channel"),
+        avatar: resolveImageUrl(creator.avatar || "", "w500"),
+        banner: resolveImageUrl(creator.banner || "", "original"),
+        description: sanitizeText(creator.description || "Canal Cinefy", "Canal Cinefy"),
+        live: false,
+        isSubscribed: true,
+        source: creator
+      });
+    }
+  } catch (error) {
+    console.warn("Cinefy subscription metadata fetch failed:", error.response?.status || error.message);
+  }
 
   try {
     const response = await axios.get(CINEFY_CHANNELS_URL, {
@@ -121,50 +179,68 @@ async function fetchSubscribedChannels(token) {
     const raw = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
     const list = Array.isArray(raw) ? raw : [];
 
-    if (list.length > 0) {
-      return list.map((channel) => ({
-        id: `cinefy_${String(channel.id || channel.slug || channel.name || Math.random()).trim()}`,
-        slug: String(channel.slug || channel.name || channel.id || "").trim(),
-        name: sanitizeText(channel.name || channel.title || channel.slug || "Cinefy Channel", "Cinefy Channel"),
-        avatar: channel.avatar || channel.image || channel.logo || "",
-        banner: channel.banner || channel.background || "",
-        description: sanitizeText(channel.description || channel.bio || channel.title || "", "Canal Cinefy"),
+    for (const channel of list) {
+      const normalized = normalizeCreatorEntry(channel, "Cinefy");
+      if (!normalized) continue;
+      const key = String(normalized.id || normalized.slug || normalized.name || "").toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      channels.push({
+        id: `cinefy_${String(normalized.id || normalized.slug || normalized.name || Math.random()).trim()}`,
+        slug: String(normalized.slug || normalized.username || normalized.name || "").trim(),
+        name: sanitizeText(normalized.name || normalized.username || "Cinefy Channel", "Cinefy Channel"),
+        avatar: resolveImageUrl(normalized.avatar || "", "w500"),
+        banner: resolveImageUrl(normalized.banner || "", "original"),
+        description: sanitizeText(normalized.description || "Canal Cinefy", "Canal Cinefy"),
         live: !!channel.is_live,
         isSubscribed: true,
         streamUrl: channel.stream_url || channel.url || "",
         source: channel
-      }));
+      });
     }
   } catch (error) {
     console.warn("Cinefy channels fetch failed:", error.response?.status || error.message);
   }
 
-  return [];
+  return channels;
+}
+
+function resolveCreatorName(author, fallback = "Cinefy") {
+  if (!author || typeof author !== "object") return fallback;
+  return sanitizeText(author.displayName || author.username || author.slug || author.name || author.title || fallback, fallback);
 }
 
 function normalizeVideoMeta(video, source = "public") {
   const id = String(video?.id || "").trim();
   if (!id) return null;
 
-  const title = sanitizeText(video.title || video.name || "Cinefy video", "Cinefy video");
-  const thumbnail = video.thumbnail || video.poster || video.avatar || "";
-  const year = video.publishedAt ? new Date(video.publishedAt).getFullYear() : undefined;
-  const author = video.author ? sanitizeText(video.author.displayName || video.author.username || video.author.slug || "", "Cinefy") : "Cinefy";
+  const media = video?.media || {};
+  const author = video?.author || video?.creator || video?.channel || {};
+  const creatorName = resolveCreatorName(author, "Cinefy");
+  const title = sanitizeText(video.title || media.title || video.name || "Cinefy video", "Cinefy video");
+  const rawPoster = media.poster || video.thumbnail || video.poster || author?.avatar || video.avatar || "";
+  const rawBackground = media.backdrop || author?.banner || video.background || rawPoster || "";
+  const poster = resolveImageUrl(rawPoster, "w500") || "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=800&q=80";
+  const background = resolveImageUrl(rawBackground, "original") || poster;
+  const year = video.publishedAt ? new Date(video.publishedAt).getFullYear() : media.releaseYear || undefined;
   const description = sanitizeText(
-    video.description || (source === "personal" ? `Conteúdo recente do usuário autenticado em Cinefy` : `Conteúdo público do Cinefy`),
+    video.description || media.overview || title || (source === "personal" ? `Conteúdo recente do usuário autenticado em Cinefy` : `Conteúdo público do Cinefy`),
     source === "personal" ? "Conteúdo recente do usuário autenticado em Cinefy" : "Conteúdo público do Cinefy"
   );
+  const isLive = !!(video?.liveStream || video?.type === "live" || String(video?.tags || "").toLowerCase().includes("live"));
+  const contentType = media?.type || video?.type || (isLive ? "live" : "movie");
+  const genreList = Array.isArray(media?.genres) && media.genres.length ? media.genres : [video?.genre || (isLive ? "live" : "general")];
 
   return {
     id: `cinefy_video_${id}`,
-    type: "movie",
-    name: title,
-    poster: thumbnail ? `https://cdn.cinefy.gg/videos/${id}/thumbnail/${thumbnail}?height=500` : "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=800&q=80",
-    background: thumbnail ? `https://cdn.cinefy.gg/videos/${id}/thumbnail/${thumbnail}?height=800` : "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1200&q=80",
-    description,
+    type: isLive ? "live" : contentType,
+    name: creatorName || title,
+    poster,
+    background,
+    description: title && title !== creatorName ? `${title} • ${creatorName}` : description,
     year,
-    genre: "live",
-    director: author,
+    genre: String(genreList[0] || (isLive ? "live" : "general")).trim() || (isLive ? "live" : "general"),
+    director: creatorName,
     source,
     raw: video
   };
@@ -173,6 +249,7 @@ function normalizeVideoMeta(video, source = "public") {
 async function fetchPublicVideoContent() {
   const urls = [
     "https://api.cinefy.gg/v1/videos?type=live&perPage=35&sortedField=viewers&sortedOrder=desc",
+    "https://api.cinefy.gg/v1/videos?perPage=35",
     "https://api.cinefy.gg/v1/videos/relevant?perPage=12&origin=for-you&index=0"
   ];
 
@@ -292,13 +369,13 @@ builder.defineMetaHandler(async ({ type, id }) => {
   const allItems = await fetchPublicVideoContent();
   const item = allItems.find((entry) => entry.id === String(id || ""));
 
-  if (type === "movie" || type === "series") {
+  if (type === "movie" || type === "series" || type === "live") {
     if (!item) return { meta: null };
 
     return {
       meta: {
         id: item.id,
-        type: type === "series" ? "series" : "movie",
+        type: type === "series" ? "series" : type === "live" ? "live" : "movie",
         name: item.name,
         poster: item.poster,
         background: item.background,
@@ -309,30 +386,49 @@ builder.defineMetaHandler(async ({ type, id }) => {
     };
   }
 
-  if (type !== "channel") return { meta: null };
+  if (type === "channel") {
+    const channelId = String(id || "").replace(/^cinefy_/, "");
+    if (!channelId) return { meta: null };
 
-  const channelId = String(id || "").replace(/^cinefy_/, "");
-  if (!channelId) return { meta: null };
+    const channels = await fetchSubscribedChannels();
+    const channel = channels.find((entry) => entry.id === `cinefy_${channelId}` || entry.slug === channelId || entry.name === channelId);
 
-  return {
-    meta: {
-      id: `cinefy_${channelId}`,
-      type: "channel",
-      name: "Cinefy Channel",
-      poster: "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=800&q=80",
-      background: "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1200&q=80",
-      description: "Canal Cinefy"
+    if (!channel) {
+      return {
+        meta: {
+          id: `cinefy_${channelId}`,
+          type: "channel",
+          name: "Cinefy Channel",
+          poster: "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=800&q=80",
+          background: "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1200&q=80",
+          description: "Canal Cinefy"
+        }
+      };
     }
-  };
+
+    return {
+      meta: {
+        id: channel.id,
+        type: "channel",
+        name: channel.name,
+        poster: channel.avatar || channel.poster,
+        background: channel.banner || channel.background || channel.poster,
+        description: channel.description || "Canal Cinefy"
+      }
+    };
+  }
+
+  return { meta: null };
 });
 
 builder.defineStreamHandler(async ({ type, id }) => {
-  if (type === "movie" || type === "series") {
+  if (type === "movie" || type === "series" || type === "live") {
     const allItems = await fetchPublicVideoContent();
-    const item = allItems.find((entry) => entry.id === String(id || ""));
+    const item = allItems.find((entry) => entry.id === String(id || "") || entry.raw?.id === String(id || "") || `cinefy_video_${entry.raw?.id}` === String(id || ""));
     if (!item) return { streams: [] };
 
-    const watchUrl = item.raw?.liveStream ? `https://cinefy.gg/watch/${item.raw.id}` : `https://cinefy.gg/watch/${item.raw?.id || item.id.replace(/^cinefy_video_/, "")}`;
+    const watchId = item.raw?.id || String(id || "").replace(/^cinefy_video_/, "");
+    const watchUrl = item.raw?.liveStream ? `https://cinefy.gg/watch/${watchId}` : `https://cinefy.gg/watch/${watchId}`;
 
     return {
       streams: [
@@ -345,17 +441,22 @@ builder.defineStreamHandler(async ({ type, id }) => {
     };
   }
 
-  if (type !== "channel") return { streams: [] };
+  if (type === "channel") {
+    const channelId = String(id || "").replace(/^cinefy_/, "");
+    if (!channelId) return { streams: [] };
 
-  return {
-    streams: [
-      {
-        name: "Cinefy Stream",
-        description: "Acesso via assinatura Cinefy",
-        url: "https://example.com/placeholder-stream"
-      }
-    ]
-  };
+    return {
+      streams: [
+        {
+          name: "Cinefy Channel",
+          description: "Acesso via assinatura Cinefy",
+          url: `https://cinefy.gg/${channelId}`
+        }
+      ]
+    };
+  }
+
+  return { streams: [] };
 });
 
 const addonRouter = getRouter(builder.getInterface());
