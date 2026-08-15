@@ -1,6 +1,6 @@
 {
-  "id": "com.cinefy",
-  "version": "1.1.0",
+  "id": "com.cinefy.v2",
+  "version": "1.2.0",
   "name": "Cinefy",
   "description": "Cinefy public and authenticated content, including live streams and personal watch history",
   "catalogs": [
