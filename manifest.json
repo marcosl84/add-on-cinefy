@@ -5,7 +5,7 @@
   "description": "Cinefy catalog with movies, series, live, channels, and all content",
   "catalogs": [
     {
-      "type": "movie",
+      "type": "other",
       "id": "cinefy_main",
       "name": "Cinefy",
       "extra": []
@@ -23,13 +23,13 @@
       "extra": []
     },
     {
-      "type": "movie",
+      "type": "live",
       "id": "cinefy_live",
       "name": "Cinefy - Live",
       "extra": []
     },
     {
-      "type": "movie",
+      "type": "other",
       "id": "cinefy_others",
       "name": "Cinefy - Outros",
       "extra": []
@@ -42,6 +42,6 @@
     }
   ],
   "resources": ["catalog", "meta", "stream"],
-  "types": ["movie", "series", "channel"],
+  "types": ["movie", "series", "channel", "live", "other"],
   "idPrefixes": ["cinefy_", "cinefy_video_", "cinefy_series_"]
 }

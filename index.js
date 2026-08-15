@@ -252,7 +252,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     };
   }
 
-  if (type !== "movie" && type !== "series") return { metas: [] };
+  if (type !== "movie" && type !== "series" && type !== "live" && type !== "other") return { metas: [] };
 
   const [publicItems, personalItems] = await Promise.all([
     fetchPublicVideoContent(),
@@ -266,14 +266,14 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 
   let selected = mainList;
 
-  if (id === "cinefy_main") selected = mainList;
+  if (id === "cinefy_main" || type === "other") selected = mainList;
   else if (id === "cinefy_movies") selected = movieItems.length ? movieItems : publicItems;
-  else if (id === "cinefy_live") selected = liveItems.length ? liveItems : publicItems;
+  else if (id === "cinefy_live" || type === "live") selected = liveItems.length ? liveItems : publicItems;
   else if (id === "cinefy_others") selected = others;
   else if (id === "cinefy_series") selected = publicItems.slice(0, 30);
   else selected = mainList;
 
-  const catalogType = type === "series" ? "series" : "movie";
+  const catalogType = type === "series" ? "series" : type === "live" ? "live" : type === "other" ? "other" : "movie";
   return {
     metas: selected.slice(0, 120).map((meta) => ({
       id: meta.id,
@@ -422,22 +422,22 @@ app.get("/:token/manifest.json", async (req, res) => {
     id: `${manifest.id}.token`,
     name: "Cinefy",
     catalogs: [
-      { type: "movie", id: "cinefy_main", name: "Cinefy", extra: [{ name: "token", options: [] }] },
+      { type: "other", id: "cinefy_main", name: "Cinefy", extra: [{ name: "token", options: [] }] },
       { type: "movie", id: "cinefy_movies", name: "Cinefy - Filmes", extra: [{ name: "token", options: [] }] },
       { type: "series", id: "cinefy_series", name: "Cinefy - Séries", extra: [{ name: "token", options: [] }] },
-      { type: "movie", id: "cinefy_live", name: "Cinefy - Live", extra: [{ name: "token", options: [] }] },
-      { type: "movie", id: "cinefy_others", name: "Cinefy - Outros", extra: [{ name: "token", options: [] }] },
+      { type: "live", id: "cinefy_live", name: "Cinefy - Live", extra: [{ name: "token", options: [] }] },
+      { type: "other", id: "cinefy_others", name: "Cinefy - Outros", extra: [{ name: "token", options: [] }] },
       { type: "channel", id: "cinefy_channels", name: "Cinefy - Canais", extra: [{ name: "token", options: [] }] }
     ],
     resources: ["catalog", "meta", "stream"],
-    types: ["movie", "series", "channel"],
+    types: ["movie", "series", "channel", "live", "other"],
     idPrefixes: ["cinefy_", "cinefy_video_", "cinefy_series_"]
   };
 
   return res.json(subManifest);
 });
 
-app.get("/:token/catalog/movie/cinefy_main.json", async (req, res) => {
+app.get("/:token/catalog/other/cinefy_main.json", async (req, res) => {
   const token = decodeURIComponent(req.params.token || "");
   const validation = await validateSession(token);
 
@@ -449,7 +449,7 @@ app.get("/:token/catalog/movie/cinefy_main.json", async (req, res) => {
   ]);
 
   const metas = [...publicItems, ...personalItems].slice(0, 120);
-  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "movie", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
+  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "other", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
 });
 
 app.get("/:token/catalog/movie/cinefy_movies.json", async (req, res) => {
@@ -464,7 +464,7 @@ app.get("/:token/catalog/movie/cinefy_movies.json", async (req, res) => {
   return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "movie", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
 });
 
-app.get("/:token/catalog/movie/cinefy_live.json", async (req, res) => {
+app.get("/:token/catalog/live/cinefy_live.json", async (req, res) => {
   const token = decodeURIComponent(req.params.token || "");
   const validation = await validateSession(token);
 
@@ -473,10 +473,10 @@ app.get("/:token/catalog/movie/cinefy_live.json", async (req, res) => {
   const publicItems = await fetchPublicVideoContent();
   const metas = publicItems.filter((item) => item.raw?.liveStream || item.genre === "live").slice(0, 120);
 
-  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "movie", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
+  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "live", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
 });
 
-app.get("/:token/catalog/movie/cinefy_others.json", async (req, res) => {
+app.get("/:token/catalog/other/cinefy_others.json", async (req, res) => {
   const token = decodeURIComponent(req.params.token || "");
   const validation = await validateSession(token);
 
@@ -488,7 +488,7 @@ app.get("/:token/catalog/movie/cinefy_others.json", async (req, res) => {
   ]);
 
   const metas = [...publicItems, ...personalItems].slice(0, 60);
-  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "movie", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
+  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "other", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
 });
 
 app.get("/:token/catalog/series/cinefy_series.json", async (req, res) => {
