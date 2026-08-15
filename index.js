@@ -420,6 +420,7 @@ app.get("/:token/manifest.json", async (req, res) => {
   const subManifest = {
     ...manifest,
     id: `${manifest.id}.token`,
+    version: manifest.version,
     name: "Cinefy",
     catalogs: [
       { type: "other", id: "cinefy_main", name: "Cinefy", extra: [{ name: "token", options: [] }] },
