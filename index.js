@@ -232,36 +232,63 @@ async function fetchPersonalVideoContent(token) {
 }
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
-  if (type === "movie") {
-    const token = extra?.token || extra?.auth || extra?.session || "";
-    const [publicItems, personalItems] = await Promise.all([
-      fetchPublicVideoContent(),
-      fetchPersonalVideoContent(token)
-    ]);
+  const token = extra?.token || extra?.auth || extra?.session || "";
+  const [publicItems, personalItems] = await Promise.all([
+    fetchPublicVideoContent(),
+    fetchPersonalVideoContent(token)
+  ]);
 
-    let metas = [...publicItems, ...personalItems];
+  const mainList = [...publicItems, ...personalItems];
+  const liveItems = publicItems.filter((item) => item.raw?.liveStream || item.genre === "live");
+  const movieItems = publicItems.filter((item) => !(item.raw?.liveStream || item.genre === "live"));
+  const otherItems = [...liveItems, ...movieItems].slice(0, 60);
 
-    if (id === "cinefy_live") {
-      metas = publicItems.filter((item) => item.raw?.liveStream || item.genre === "live");
-    }
+  let selected = mainList;
 
-    metas = metas.slice(0, 120);
+  if (type === "series") {
+    selected = publicItems.slice(0, 30);
+  } else if (type === "movie") {
+    if (id === "cinefy_main") selected = mainList;
+    else if (id === "cinefy_movies") selected = movieItems.length ? movieItems : publicItems;
+    else if (id === "cinefy_live") selected = liveItems.length ? liveItems : publicItems;
+    else if (id === "cinefy_others") selected = otherItems;
+    else selected = mainList;
+  }
 
+  if (type !== "movie" && type !== "series" && type !== "channel") return { metas: [] };
+
+  if (type === "channel") {
+    const hasValidSession = await validateSession(token);
+    if (!hasValidSession.valid) return { metas: [] };
+
+    const channels = await fetchSubscribedChannels(token);
     return {
-      metas: metas.map((meta) => ({
-        id: meta.id,
-        type: "movie",
-        name: meta.name,
-        poster: meta.poster,
-        background: meta.background,
-        description: meta.description,
-        genres: [meta.genre],
-        languages: ["pt-BR"]
+      metas: channels.map((channel) => ({
+        id: channel.id,
+        type: "channel",
+        name: channel.name,
+        poster: channel.avatar || "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=800&q=80",
+        background: channel.banner || "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1200&q=80",
+        logo: channel.avatar || "",
+        description: channel.description || "Canal Cinefy"
       }))
     };
   }
 
-  if (type !== "channel") return { metas: [] };
+  const catalogType = type === "series" ? "series" : "movie";
+  const metas = selected.slice(0, 120).map((meta) => ({
+    id: meta.id,
+    type: catalogType,
+    name: meta.name,
+    poster: meta.poster,
+    background: meta.background,
+    description: meta.description,
+    genres: [meta.genre],
+    languages: ["pt-BR"]
+  }));
+
+  return { metas };
+
 
   const token = extra?.token || extra?.auth || extra?.session || "";
   const hasValidSession = await validateSession(token);
@@ -284,15 +311,16 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 });
 
 builder.defineMetaHandler(async ({ type, id }) => {
-  if (type === "movie") {
-    const allItems = await fetchPublicVideoContent();
-    const item = allItems.find((entry) => entry.id === String(id || ""));
+  const allItems = await fetchPublicVideoContent();
+  const item = allItems.find((entry) => entry.id === String(id || ""));
+
+  if (type === "movie" || type === "series") {
     if (!item) return { meta: null };
 
     return {
       meta: {
         id: item.id,
-        type: "movie",
+        type: type === "series" ? "series" : "movie",
         name: item.name,
         poster: item.poster,
         background: item.background,
@@ -321,7 +349,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
 });
 
 builder.defineStreamHandler(async ({ type, id }) => {
-  if (type === "movie") {
+  if (type === "movie" || type === "series") {
     const allItems = await fetchPublicVideoContent();
     const item = allItems.find((entry) => entry.id === String(id || ""));
     if (!item) return { streams: [] };
@@ -416,12 +444,16 @@ app.get("/:token/manifest.json", async (req, res) => {
     id: `${manifest.id}.token`,
     name: "Cinefy",
     catalogs: [
-      { type: "movie", id: "cinefy_all", name: "Cinefy - Tudo", extra: [{ name: "token", options: [] }] },
+      { type: "movie", id: "cinefy_main", name: "Cinefy", extra: [{ name: "token", options: [] }] },
+      { type: "movie", id: "cinefy_movies", name: "Cinefy - Filmes", extra: [{ name: "token", options: [] }] },
+      { type: "series", id: "cinefy_series", name: "Cinefy - Séries", extra: [{ name: "token", options: [] }] },
+      { type: "movie", id: "cinefy_live", name: "Cinefy - Live", extra: [{ name: "token", options: [] }] },
+      { type: "movie", id: "cinefy_others", name: "Cinefy - Outros", extra: [{ name: "token", options: [] }] },
       { type: "channel", id: "cinefy_channels", name: "Cinefy - Canais", extra: [{ name: "token", options: [] }] }
     ],
     resources: ["catalog", "meta", "stream"],
-    types: ["movie", "channel"],
-    idPrefixes: ["cinefy_", "cinefy_video_"]
+    types: ["movie", "series", "channel"],
+    idPrefixes: ["cinefy_", "cinefy_video_", "cinefy_series_"]
   };
 
   return res.json(subManifest);
