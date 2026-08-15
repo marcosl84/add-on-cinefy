@@ -1,5 +1,9 @@
 node_modules/
 .env
+.env.*
+cinefy-login-capture.json
+cinefy-capture.json
+*.log
 npm-debug.log*
 .DS_Store
 coverage/

@@ -142,7 +142,118 @@ async function fetchSubscribedChannels(token) {
   return [];
 }
 
+function normalizeVideoMeta(video, source = "public") {
+  const id = String(video?.id || "").trim();
+  if (!id) return null;
+
+  const title = sanitizeText(video.title || video.name || "Cinefy video", "Cinefy video");
+  const thumbnail = video.thumbnail || video.poster || video.avatar || "";
+  const year = video.publishedAt ? new Date(video.publishedAt).getFullYear() : undefined;
+  const author = video.author ? sanitizeText(video.author.displayName || video.author.username || video.author.slug || "", "Cinefy") : "Cinefy";
+  const description = sanitizeText(
+    video.description || (source === "personal" ? `Conteúdo recente do usuário autenticado em Cinefy` : `Conteúdo público do Cinefy`),
+    source === "personal" ? "Conteúdo recente do usuário autenticado em Cinefy" : "Conteúdo público do Cinefy"
+  );
+
+  return {
+    id: `cinefy_video_${id}`,
+    type: "movie",
+    name: title,
+    poster: thumbnail ? `https://cdn.cinefy.gg/videos/${id}/thumbnail/${thumbnail}?height=500` : "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=800&q=80",
+    background: thumbnail ? `https://cdn.cinefy.gg/videos/${id}/thumbnail/${thumbnail}?height=800` : "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1200&q=80",
+    description,
+    year,
+    genre: "live",
+    director: author,
+    source,
+    raw: video
+  };
+}
+
+async function fetchPublicVideoContent() {
+  const urls = [
+    "https://api.cinefy.gg/v1/videos?type=live&perPage=35&sortedField=viewers&sortedOrder=desc",
+    "https://api.cinefy.gg/v1/videos/relevant?perPage=12&origin=for-you&index=0"
+  ];
+
+  const items = [];
+  for (const url of urls) {
+    try {
+      const response = await axios.get(url, {
+        timeout: 20000,
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        }
+      });
+
+      const payload = response.data?.data || [];
+      if (Array.isArray(payload)) {
+        for (const item of payload) {
+          const meta = normalizeVideoMeta(item, "public");
+          if (meta) {
+            const exists = items.some((entry) => entry.id === meta.id);
+            if (!exists) items.push(meta);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn("Cinefy public catalog fetch failed:", url, error.response?.status || error.message);
+    }
+  }
+
+  return items;
+}
+
+async function fetchPersonalVideoContent(token) {
+  const authToken = normalizeAuthToken(token || CINEFY_AUTH_TOKEN);
+  if (!authToken) return [];
+
+  const validation = await validateSession(authToken);
+  if (!validation.valid) return [];
+
+  try {
+    const response = await axios.get("https://api.cinefy.gg/v1/user/watch-times", {
+      headers: buildAuthHeaders(authToken),
+      timeout: 20000
+    });
+
+    const payload = response.data || [];
+    if (!Array.isArray(payload)) return [];
+
+    return payload
+      .map((entry) => normalizeVideoMeta(entry.video, "personal"))
+      .filter(Boolean)
+      .slice(0, 24);
+  } catch (error) {
+    console.warn("Cinefy personal catalog fetch failed:", error.response?.status || error.message);
+    return [];
+  }
+}
+
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
+  if (type === "movie") {
+    const token = extra?.token || extra?.auth || extra?.session || "";
+    const [publicItems, personalItems] = await Promise.all([
+      fetchPublicVideoContent(),
+      fetchPersonalVideoContent(token)
+    ]);
+
+    const metas = [...publicItems, ...personalItems].slice(0, 120);
+    return {
+      metas: metas.map((meta) => ({
+        id: meta.id,
+        type: "movie",
+        name: meta.name,
+        poster: meta.poster,
+        background: meta.background,
+        description: meta.description,
+        genres: [meta.genre],
+        languages: ["pt-BR"]
+      }))
+    };
+  }
+
   if (type !== "channel") return { metas: [] };
 
   const token = extra?.token || extra?.auth || extra?.session || "";
@@ -166,6 +277,25 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 });
 
 builder.defineMetaHandler(async ({ type, id }) => {
+  if (type === "movie") {
+    const allItems = await fetchPublicVideoContent();
+    const item = allItems.find((entry) => entry.id === String(id || ""));
+    if (!item) return { meta: null };
+
+    return {
+      meta: {
+        id: item.id,
+        type: "movie",
+        name: item.name,
+        poster: item.poster,
+        background: item.background,
+        description: item.description,
+        genres: [item.genre],
+        languages: ["pt-BR"]
+      }
+    };
+  }
+
   if (type !== "channel") return { meta: null };
 
   const channelId = String(id || "").replace(/^cinefy_/, "");
@@ -184,6 +314,24 @@ builder.defineMetaHandler(async ({ type, id }) => {
 });
 
 builder.defineStreamHandler(async ({ type, id }) => {
+  if (type === "movie") {
+    const allItems = await fetchPublicVideoContent();
+    const item = allItems.find((entry) => entry.id === String(id || ""));
+    if (!item) return { streams: [] };
+
+    const watchUrl = item.raw?.liveStream ? `https://cinefy.gg/watch/${item.raw.id}` : `https://cinefy.gg/watch/${item.raw?.id || item.id.replace(/^cinefy_video_/, "")}`;
+
+    return {
+      streams: [
+        {
+          name: item.name,
+          description: item.description,
+          url: watchUrl
+        }
+      ]
+    };
+  }
+
   if (type !== "channel") return { streams: [] };
 
   return {
@@ -260,11 +408,45 @@ app.get("/:token/manifest.json", async (req, res) => {
     ...manifest,
     id: `${manifest.id}.token`,
     name: "Cinefy",
-    catalogs: [{ type: "channel", id: "cinefy_channels", name: "Cinefy - Canais", extra: [{ name: "token", options: [] }] }],
-    resources: ["catalog", "meta", "stream"]
+    catalogs: [
+      { type: "movie", id: "cinefy_all", name: "Cinefy - Tudo", extra: [{ name: "token", options: [] }] },
+      { type: "channel", id: "cinefy_channels", name: "Cinefy - Canais", extra: [{ name: "token", options: [] }] }
+    ],
+    resources: ["catalog", "meta", "stream"],
+    types: ["movie", "channel"],
+    idPrefixes: ["cinefy_", "cinefy_video_"]
   };
 
   return res.json(subManifest);
+});
+
+app.get("/:token/catalog/movie/cinefy_all.json", async (req, res) => {
+  const token = decodeURIComponent(req.params.token || "");
+  const validation = await validateSession(token);
+
+  if (!validation.valid) {
+    return res.status(401).json({ metas: [] });
+  }
+
+  const [publicItems, personalItems] = await Promise.all([
+    fetchPublicVideoContent(),
+    fetchPersonalVideoContent(token)
+  ]);
+
+  const metas = [...publicItems, ...personalItems].slice(0, 120);
+
+  return res.json({
+    metas: metas.map((meta) => ({
+      id: meta.id,
+      type: "movie",
+      name: meta.name,
+      poster: meta.poster,
+      background: meta.background,
+      description: meta.description,
+      genres: [meta.genre],
+      languages: ["pt-BR"]
+    }))
+  });
 });
 
 app.get("/:token/catalog/channel/cinefy_channels.json", async (req, res) => {
@@ -289,6 +471,32 @@ app.get("/:token/catalog/channel/cinefy_channels.json", async (req, res) => {
   });
 });
 
+app.get("/:token/meta/movie/:id.json", async (req, res) => {
+  const token = decodeURIComponent(req.params.token || "");
+  const validation = await validateSession(token);
+
+  if (!validation.valid) {
+    return res.status(401).json({ meta: null });
+  }
+
+  const allItems = await fetchPublicVideoContent();
+  const item = allItems.find((entry) => entry.id === String(req.params.id || ""));
+  if (!item) return res.json({ meta: null });
+
+  return res.json({
+    meta: {
+      id: item.id,
+      type: "movie",
+      name: item.name,
+      poster: item.poster,
+      background: item.background,
+      description: item.description,
+      genres: [item.genre],
+      languages: ["pt-BR"]
+    }
+  });
+});
+
 app.get("/:token/meta/channel/:id.json", async (req, res) => {
   const token = decodeURIComponent(req.params.token || "");
   const validation = await validateSession(token);
@@ -307,6 +515,29 @@ app.get("/:token/meta/channel/:id.json", async (req, res) => {
       background: "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1200&q=80",
       description: "Canal Cinefy"
     }
+  });
+});
+
+app.get("/:token/stream/movie/:id.json", async (req, res) => {
+  const token = decodeURIComponent(req.params.token || "");
+  const validation = await validateSession(token);
+
+  if (!validation.valid) {
+    return res.status(401).json({ streams: [] });
+  }
+
+  const allItems = await fetchPublicVideoContent();
+  const item = allItems.find((entry) => entry.id === String(req.params.id || ""));
+  if (!item) return res.json({ streams: [] });
+
+  const watchUrl = item.raw?.liveStream ? `https://cinefy.gg/watch/${item.raw.id}` : `https://cinefy.gg/watch/${item.raw?.id || item.id.replace(/^cinefy_video_/, "")}`;
+
+  return res.json({
+    streams: [{
+      name: item.name,
+      description: item.description,
+      url: watchUrl
+    }]
   });
 });
 
