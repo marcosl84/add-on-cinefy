@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: cinefy-addon
+    env: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 7000
+      - key: HOST
+        value: 0.0.0.0
+      - key: NODE_ENV
+        value: production
+      - key: CINEFY_API_BASE
+        value: https://api.cinefy.gg
+      - key: CINEFY_VALIDATE_URL
+        value: https://api.cinefy.gg/api/v1/me
+      - key: CINEFY_CHANNELS_URL
+        value: https://api.cinefy.gg/api/v1/subscriptions/channels
+      - key: CINEFY_AUTH_TOKEN_SECRET
+        generateValue: true

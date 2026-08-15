@@ -10,10 +10,13 @@ const app = express();
 const PORT = Number(process.env.PORT || 7000);
 const HOST = process.env.HOST || "0.0.0.0";
 const CINEFY_API_BASE = process.env.CINEFY_API_BASE || "https://api.cinefy.gg";
-const CINEFY_VALIDATE_URL = process.env.CINEFY_VALIDATE_URL || `${CINEFY_API_BASE}/api/v1/me`;
-const CINEFY_CHANNELS_URL = process.env.CINEFY_CHANNELS_URL || `${CINEFY_API_BASE}/api/v1/subscriptions/channels`;
+const CINEFY_VALIDATE_URL = process.env.CINEFY_VALIDATE_URL || `${CINEFY_API_BASE}/v2/auth/@me?platform=web&platformLang=pt-BR&platformTimeZone=America%2FSao_Paulo&screenWidth=1440&screenHeight=1200`;
+const CINEFY_CHANNELS_URL = process.env.CINEFY_CHANNELS_URL || `${CINEFY_API_BASE}/v1/feed/creators?perPage=11`;
+const CINEFY_AUTH_TOKEN = normalizeAuthToken(process.env.CINEFY_TOKEN || process.env.CINEFY_SESSION_TOKEN || process.env.CINEFY_AUTH_TOKEN || "");
 const CINEFY_API_KEY = process.env.CINEFY_API_KEY || "";
 const CINEFY_AUTH_TOKEN_SECRET = process.env.CINEFY_AUTH_TOKEN_SECRET || "change-me";
+const CINEFY_AUTH_HEADER = process.env.CINEFY_AUTH_HEADER || "Authorization";
+const CINEFY_SESSION_HEADER = process.env.CINEFY_SESSION_HEADER || "Cookie";
 const CACHE_DURATION = Number(process.env.CACHE_DURATION || 30) * 1000;
 
 app.set("trust proxy", 1);
@@ -26,16 +29,48 @@ function sanitizeText(value, fallback = "") {
   return String(value || fallback).replace(/\s+/g, " ").trim() || fallback;
 }
 
-function buildAuthHeaders(token) {
-  const auth = String(token || "").trim();
+function normalizeAuthToken(rawToken) {
+  const value = String(rawToken || "").trim();
+  if (!value) return "";
+  return value.replace(/^Bearer\s+/i, "").replace(/^['"]|['"]$/g, "").trim();
+}
+
+function extractAuthTokenFromRequest(req) {
+  const authHeader = String(req.headers?.authorization || "").trim();
+  if (authHeader) return normalizeAuthToken(authHeader);
+
+  const customHeader = String(req.headers?.[CINEFY_AUTH_HEADER.toLowerCase()] || "").trim();
+  if (customHeader) return normalizeAuthToken(customHeader);
+
+  const queryToken = String(req.query?.token || req.query?.auth || req.query?.session || "").trim();
+  if (queryToken) return normalizeAuthToken(queryToken);
+
+  const rawCookie = String(req.headers?.cookie || "").trim();
+  if (rawCookie) {
+    const match = rawCookie.match(/(?:^|;\s*)CinefySession=([^;]+)/i) || rawCookie.match(/(?:^|;\s*)session=([^;]+)/i);
+    if (match?.[1]) return normalizeAuthToken(decodeURIComponent(match[1]));
+  }
+
+  return "";
+}
+
+function buildAuthHeaders(token, cookieHeader = "") {
+  const auth = normalizeAuthToken(token);
   const headers = {
     Accept: "application/json",
     "Content-Type": "application/json",
-    "User-Agent": "Mozilla/5.0 (compatible; Stremio-Cinefy-Addon/1.0)"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
   };
 
   if (auth) {
-    headers.Authorization = auth.startsWith("Bearer ") ? auth : `Bearer ${auth}`;
+    headers[CINEFY_AUTH_HEADER] = auth.startsWith("Bearer ") ? auth : `Bearer ${auth}`;
+    headers["X-Auth-Token"] = auth;
+    headers["X-Cinefy-Token"] = auth;
+    headers[CINEFY_SESSION_HEADER] = `token=${auth}`;
+  }
+
+  if (cookieHeader) {
+    headers[CINEFY_SESSION_HEADER] = cookieHeader;
   }
 
   if (CINEFY_API_KEY) {
@@ -46,7 +81,7 @@ function buildAuthHeaders(token) {
 }
 
 async function validateSession(token) {
-  const authToken = String(token || "").trim();
+  const authToken = normalizeAuthToken(token || CINEFY_AUTH_TOKEN);
   if (!authToken) return { valid: false, reason: "missing token" };
 
   try {
@@ -74,8 +109,7 @@ async function validateSession(token) {
 }
 
 async function fetchSubscribedChannels(token) {
-  const authToken = String(token || "").trim();
-  if (!authToken) return [];
+  const authToken = normalizeAuthToken(token || CINEFY_AUTH_TOKEN);
 
   try {
     const response = await axios.get(CINEFY_CHANNELS_URL, {
@@ -83,25 +117,29 @@ async function fetchSubscribedChannels(token) {
       timeout: 20000
     });
 
-    const raw = response.data?.data || response.data?.channels || response.data || [];
+    const payload = response.data?.data || response.data?.channels || response.data || [];
+    const raw = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
     const list = Array.isArray(raw) ? raw : [];
 
-    return list.map((channel) => ({
-      id: `cinefy_${String(channel.id || channel.slug || channel.name || Math.random()).trim()}`,
-      slug: String(channel.slug || channel.name || channel.id || "").trim(),
-      name: sanitizeText(channel.name || channel.title || channel.slug || "Cinefy Channel", "Cinefy Channel"),
-      avatar: channel.avatar || channel.image || channel.logo || "",
-      banner: channel.banner || channel.background || "",
-      description: sanitizeText(channel.description || channel.bio || channel.title || "", "Canal Cinefy"),
-      live: !!channel.is_live,
-      isSubscribed: true,
-      streamUrl: channel.stream_url || channel.url || "",
-      source: channel
-    }));
+    if (list.length > 0) {
+      return list.map((channel) => ({
+        id: `cinefy_${String(channel.id || channel.slug || channel.name || Math.random()).trim()}`,
+        slug: String(channel.slug || channel.name || channel.id || "").trim(),
+        name: sanitizeText(channel.name || channel.title || channel.slug || "Cinefy Channel", "Cinefy Channel"),
+        avatar: channel.avatar || channel.image || channel.logo || "",
+        banner: channel.banner || channel.background || "",
+        description: sanitizeText(channel.description || channel.bio || channel.title || "", "Canal Cinefy"),
+        live: !!channel.is_live,
+        isSubscribed: true,
+        streamUrl: channel.stream_url || channel.url || "",
+        source: channel
+      }));
+    }
   } catch (error) {
     console.warn("Cinefy channels fetch failed:", error.response?.status || error.message);
-    return [];
   }
+
+  return [];
 }
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
