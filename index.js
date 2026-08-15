@@ -233,29 +233,6 @@ async function fetchPersonalVideoContent(token) {
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
   const token = extra?.token || extra?.auth || extra?.session || "";
-  const [publicItems, personalItems] = await Promise.all([
-    fetchPublicVideoContent(),
-    fetchPersonalVideoContent(token)
-  ]);
-
-  const mainList = [...publicItems, ...personalItems];
-  const liveItems = publicItems.filter((item) => item.raw?.liveStream || item.genre === "live");
-  const movieItems = publicItems.filter((item) => !(item.raw?.liveStream || item.genre === "live"));
-  const otherItems = [...liveItems, ...movieItems].slice(0, 60);
-
-  let selected = mainList;
-
-  if (type === "series") {
-    selected = publicItems.slice(0, 30);
-  } else if (type === "movie") {
-    if (id === "cinefy_main") selected = mainList;
-    else if (id === "cinefy_movies") selected = movieItems.length ? movieItems : publicItems;
-    else if (id === "cinefy_live") selected = liveItems.length ? liveItems : publicItems;
-    else if (id === "cinefy_others") selected = otherItems;
-    else selected = mainList;
-  }
-
-  if (type !== "movie" && type !== "series" && type !== "channel") return { metas: [] };
 
   if (type === "channel") {
     const hasValidSession = await validateSession(token);
@@ -275,37 +252,38 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     };
   }
 
+  if (type !== "movie" && type !== "series") return { metas: [] };
+
+  const [publicItems, personalItems] = await Promise.all([
+    fetchPublicVideoContent(),
+    fetchPersonalVideoContent(token)
+  ]);
+
+  const mainList = [...publicItems, ...personalItems];
+  const liveItems = publicItems.filter((item) => item.raw?.liveStream || item.genre === "live");
+  const movieItems = publicItems.filter((item) => !(item.raw?.liveStream || item.genre === "live"));
+  const others = [...mainList].slice(0, 60);
+
+  let selected = mainList;
+
+  if (id === "cinefy_main") selected = mainList;
+  else if (id === "cinefy_movies") selected = movieItems.length ? movieItems : publicItems;
+  else if (id === "cinefy_live") selected = liveItems.length ? liveItems : publicItems;
+  else if (id === "cinefy_others") selected = others;
+  else if (id === "cinefy_series") selected = publicItems.slice(0, 30);
+  else selected = mainList;
+
   const catalogType = type === "series" ? "series" : "movie";
-  const metas = selected.slice(0, 120).map((meta) => ({
-    id: meta.id,
-    type: catalogType,
-    name: meta.name,
-    poster: meta.poster,
-    background: meta.background,
-    description: meta.description,
-    genres: [meta.genre],
-    languages: ["pt-BR"]
-  }));
-
-  return { metas };
-
-
-  const token = extra?.token || extra?.auth || extra?.session || "";
-  const hasValidSession = await validateSession(token);
-  if (!hasValidSession.valid) {
-    return { metas: [] };
-  }
-
-  const channels = await fetchSubscribedChannels(token);
   return {
-    metas: channels.map((channel) => ({
-      id: channel.id,
-      type: "channel",
-      name: channel.name,
-      poster: channel.avatar || "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=800&q=80",
-      background: channel.banner || "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1200&q=80",
-      logo: channel.avatar || "",
-      description: channel.description || "Canal Cinefy"
+    metas: selected.slice(0, 120).map((meta) => ({
+      id: meta.id,
+      type: catalogType,
+      name: meta.name,
+      poster: meta.poster,
+      background: meta.background,
+      description: meta.description,
+      genres: [meta.genre],
+      languages: ["pt-BR"]
     }))
   };
 });
@@ -459,38 +437,11 @@ app.get("/:token/manifest.json", async (req, res) => {
   return res.json(subManifest);
 });
 
-app.get("/:token/catalog/movie/cinefy_live.json", async (req, res) => {
+app.get("/:token/catalog/movie/cinefy_main.json", async (req, res) => {
   const token = decodeURIComponent(req.params.token || "");
   const validation = await validateSession(token);
 
-  if (!validation.valid) {
-    return res.status(401).json({ metas: [] });
-  }
-
-  const publicItems = await fetchPublicVideoContent();
-  const metas = publicItems.filter((item) => item.raw?.liveStream || item.genre === "live").slice(0, 120);
-
-  return res.json({
-    metas: metas.map((meta) => ({
-      id: meta.id,
-      type: "movie",
-      name: meta.name,
-      poster: meta.poster,
-      background: meta.background,
-      description: meta.description,
-      genres: [meta.genre],
-      languages: ["pt-BR"]
-    }))
-  });
-});
-
-app.get("/:token/catalog/movie/cinefy_all.json", async (req, res) => {
-  const token = decodeURIComponent(req.params.token || "");
-  const validation = await validateSession(token);
-
-  if (!validation.valid) {
-    return res.status(401).json({ metas: [] });
-  }
+  if (!validation.valid) return res.status(401).json({ metas: [] });
 
   const [publicItems, personalItems] = await Promise.all([
     fetchPublicVideoContent(),
@@ -498,19 +449,58 @@ app.get("/:token/catalog/movie/cinefy_all.json", async (req, res) => {
   ]);
 
   const metas = [...publicItems, ...personalItems].slice(0, 120);
+  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "movie", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
+});
 
-  return res.json({
-    metas: metas.map((meta) => ({
-      id: meta.id,
-      type: "movie",
-      name: meta.name,
-      poster: meta.poster,
-      background: meta.background,
-      description: meta.description,
-      genres: [meta.genre],
-      languages: ["pt-BR"]
-    }))
-  });
+app.get("/:token/catalog/movie/cinefy_movies.json", async (req, res) => {
+  const token = decodeURIComponent(req.params.token || "");
+  const validation = await validateSession(token);
+
+  if (!validation.valid) return res.status(401).json({ metas: [] });
+
+  const publicItems = await fetchPublicVideoContent();
+  const metas = publicItems.filter((item) => !(item.raw?.liveStream || item.genre === "live")).slice(0, 120);
+
+  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "movie", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
+});
+
+app.get("/:token/catalog/movie/cinefy_live.json", async (req, res) => {
+  const token = decodeURIComponent(req.params.token || "");
+  const validation = await validateSession(token);
+
+  if (!validation.valid) return res.status(401).json({ metas: [] });
+
+  const publicItems = await fetchPublicVideoContent();
+  const metas = publicItems.filter((item) => item.raw?.liveStream || item.genre === "live").slice(0, 120);
+
+  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "movie", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
+});
+
+app.get("/:token/catalog/movie/cinefy_others.json", async (req, res) => {
+  const token = decodeURIComponent(req.params.token || "");
+  const validation = await validateSession(token);
+
+  if (!validation.valid) return res.status(401).json({ metas: [] });
+
+  const [publicItems, personalItems] = await Promise.all([
+    fetchPublicVideoContent(),
+    fetchPersonalVideoContent(token)
+  ]);
+
+  const metas = [...publicItems, ...personalItems].slice(0, 60);
+  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "movie", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
+});
+
+app.get("/:token/catalog/series/cinefy_series.json", async (req, res) => {
+  const token = decodeURIComponent(req.params.token || "");
+  const validation = await validateSession(token);
+
+  if (!validation.valid) return res.status(401).json({ metas: [] });
+
+  const publicItems = await fetchPublicVideoContent();
+  const metas = publicItems.slice(0, 30);
+
+  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "series", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
 });
 
 app.get("/:token/catalog/channel/cinefy_channels.json", async (req, res) => {
@@ -539,26 +529,26 @@ app.get("/:token/meta/movie/:id.json", async (req, res) => {
   const token = decodeURIComponent(req.params.token || "");
   const validation = await validateSession(token);
 
-  if (!validation.valid) {
-    return res.status(401).json({ meta: null });
-  }
+  if (!validation.valid) return res.status(401).json({ meta: null });
 
   const allItems = await fetchPublicVideoContent();
   const item = allItems.find((entry) => entry.id === String(req.params.id || ""));
   if (!item) return res.json({ meta: null });
 
-  return res.json({
-    meta: {
-      id: item.id,
-      type: "movie",
-      name: item.name,
-      poster: item.poster,
-      background: item.background,
-      description: item.description,
-      genres: [item.genre],
-      languages: ["pt-BR"]
-    }
-  });
+  return res.json({ meta: { id: item.id, type: "movie", name: item.name, poster: item.poster, background: item.background, description: item.description, genres: [item.genre], languages: ["pt-BR"] } });
+});
+
+app.get("/:token/meta/series/:id.json", async (req, res) => {
+  const token = decodeURIComponent(req.params.token || "");
+  const validation = await validateSession(token);
+
+  if (!validation.valid) return res.status(401).json({ meta: null });
+
+  const allItems = await fetchPublicVideoContent();
+  const item = allItems.find((entry) => entry.id === String(req.params.id || ""));
+  if (!item) return res.json({ meta: null });
+
+  return res.json({ meta: { id: item.id, type: "series", name: item.name, poster: item.poster, background: item.background, description: item.description, genres: [item.genre], languages: ["pt-BR"] } });
 });
 
 app.get("/:token/meta/channel/:id.json", async (req, res) => {
@@ -586,9 +576,7 @@ app.get("/:token/stream/movie/:id.json", async (req, res) => {
   const token = decodeURIComponent(req.params.token || "");
   const validation = await validateSession(token);
 
-  if (!validation.valid) {
-    return res.status(401).json({ streams: [] });
-  }
+  if (!validation.valid) return res.status(401).json({ streams: [] });
 
   const allItems = await fetchPublicVideoContent();
   const item = allItems.find((entry) => entry.id === String(req.params.id || ""));
@@ -596,13 +584,22 @@ app.get("/:token/stream/movie/:id.json", async (req, res) => {
 
   const watchUrl = item.raw?.liveStream ? `https://cinefy.gg/watch/${item.raw.id}` : `https://cinefy.gg/watch/${item.raw?.id || item.id.replace(/^cinefy_video_/, "")}`;
 
-  return res.json({
-    streams: [{
-      name: item.name,
-      description: item.description,
-      url: watchUrl
-    }]
-  });
+  return res.json({ streams: [{ name: item.name, description: item.description, url: watchUrl }] });
+});
+
+app.get("/:token/stream/series/:id.json", async (req, res) => {
+  const token = decodeURIComponent(req.params.token || "");
+  const validation = await validateSession(token);
+
+  if (!validation.valid) return res.status(401).json({ streams: [] });
+
+  const allItems = await fetchPublicVideoContent();
+  const item = allItems.find((entry) => entry.id === String(req.params.id || ""));
+  if (!item) return res.json({ streams: [] });
+
+  const watchUrl = item.raw?.liveStream ? `https://cinefy.gg/watch/${item.raw.id}` : `https://cinefy.gg/watch/${item.raw?.id || item.id.replace(/^cinefy_video_/, "")}`;
+
+  return res.json({ streams: [{ name: item.name, description: item.description, url: watchUrl }] });
 });
 
 app.get("/:token/stream/channel/:id.json", async (req, res) => {
