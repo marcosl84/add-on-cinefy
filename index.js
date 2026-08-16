@@ -356,6 +356,13 @@ function normalizeVideoMeta(video, source = "public") {
   };
 }
 
+function resolvePlayableType(meta) {
+  if (!meta || typeof meta !== "object") return "movie";
+  if (isLiveVideo(meta.raw || meta) || meta.type === "live") return "live";
+  if (meta.type === "series") return "series";
+  return "movie";
+}
+
 async function fetchVideoDetailById(videoId, token = CINEFY_AUTH_TOKEN) {
   const id = String(videoId || "").trim();
   if (!id) return null;
@@ -598,7 +605,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
   return {
     metas: selected.slice(0, 120).map((meta) => ({
       id: meta.id,
-      type: catalogType,
+      type: catalogType === "other" ? resolvePlayableType(meta) : catalogType,
       name: meta.name,
       poster: meta.poster,
       background: meta.background,
@@ -685,7 +692,6 @@ builder.defineStreamHandler(async ({ type, id, extra }) => {
           description: item.description,
           url: playbackUrl,
           behaviorHints: {
-            notWebReady: true,
             proxyHeaders: {
               request: {
                 Referer: "https://cinefy.gg/",
@@ -844,7 +850,7 @@ app.get("/:token/catalog/other/cinefy_main.json", async (req, res) => {
   ]);
 
   const metas = [...publicItems, ...personalItems].slice(0, 120);
-  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "other", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
+  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: resolvePlayableType(meta), name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
 });
 
 app.get("/:token/catalog/movie/cinefy_movies.json", async (req, res) => {
@@ -883,7 +889,7 @@ app.get("/:token/catalog/other/cinefy_others.json", async (req, res) => {
   ]);
 
   const metas = [...publicItems, ...personalItems].slice(0, 60);
-  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "other", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
+  return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: resolvePlayableType(meta), name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
 });
 
 app.get("/:token/catalog/series/cinefy_series.json", async (req, res) => {
@@ -967,41 +973,41 @@ app.get("/:token/meta/channel/:id.json", async (req, res) => {
   });
 });
 
-app.get("/:token/stream/movie/:id.json", async (req, res) => {
-  const token = decodeURIComponent(req.params.token || "");
-  const validation = await validateSession(token);
-
-  if (!validation.valid) return res.status(401).json({ streams: [] });
-
+async function buildTokenStreams(req, token, requestedId) {
   const allItems = await fetchPublicVideoContent();
-  const item = allItems.find((entry) => entry.id === String(req.params.id || ""));
-  const watchId = String(req.params.id || "").replace(/^cinefy_video_/, "") || item?.raw?.id || "";
+  const item = allItems.find((entry) => entry.id === String(requestedId || ""));
+  const watchId = String(requestedId || "").replace(/^cinefy_video_/, "") || item?.raw?.id || "";
   const detail = watchId ? await fetchVideoDetailById(watchId, token) : null;
   const resolved = item || (detail ? normalizeVideoMeta(detail, "public") : null);
-  if (!resolved) return res.json({ streams: [] });
+  if (!resolved || !watchId) return [];
 
   const watchUrl = buildProxyHlsUrl(token, watchId, `${req.protocol}://${req.get("host")}`);
+  return [{
+    name: resolved.name,
+    description: resolved.description,
+    url: watchUrl,
+    behaviorHints: {
+      proxyHeaders: {
+        request: { Referer: "https://cinefy.gg/", Origin: "https://cinefy.gg" },
+        response: {}
+      }
+    }
+  }];
+}
 
-  return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl, behaviorHints: { notWebReady: true, proxyHeaders: { request: { Referer: "https://cinefy.gg/", Origin: "https://cinefy.gg" }, response: {} } } }] });
-});
-
-app.get("/:token/stream/series/:id.json", async (req, res) => {
+async function handleTokenVideoStream(req, res) {
   const token = decodeURIComponent(req.params.token || "");
   const validation = await validateSession(token);
-
   if (!validation.valid) return res.status(401).json({ streams: [] });
 
-  const allItems = await fetchPublicVideoContent();
-  const item = allItems.find((entry) => entry.id === String(req.params.id || ""));
-  const watchId = String(req.params.id || "").replace(/^cinefy_video_/, "") || item?.raw?.id || "";
-  const detail = watchId ? await fetchVideoDetailById(watchId, token) : null;
-  const resolved = item || (detail ? normalizeVideoMeta(detail, "public") : null);
-  if (!resolved) return res.json({ streams: [] });
+  const streams = await buildTokenStreams(req, token, req.params.id);
+  return res.json({ streams });
+}
 
-  const watchUrl = buildProxyHlsUrl(token, watchId, `${req.protocol}://${req.get("host")}`);
-
-  return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl, behaviorHints: { notWebReady: true, proxyHeaders: { request: { Referer: "https://cinefy.gg/", Origin: "https://cinefy.gg" }, response: {} } } }] });
-});
+app.get("/:token/stream/movie/:id.json", handleTokenVideoStream);
+app.get("/:token/stream/series/:id.json", handleTokenVideoStream);
+app.get("/:token/stream/live/:id.json", handleTokenVideoStream);
+app.get("/:token/stream/other/:id.json", handleTokenVideoStream);
 
 app.get("/:token/stream/channel/:id.json", async (req, res) => {
   const token = decodeURIComponent(req.params.token || "");
