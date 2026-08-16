@@ -218,6 +218,12 @@ function isLiveVideo(video) {
   return !!(video?.liveStream || rawType === "live" || rawTags.includes("live") || String(video?.status || "").toLowerCase() === "live");
 }
 
+function isPlayableVideo(video) {
+  if (!video || typeof video !== "object") return false;
+  if (isLiveVideo(video)) return false;
+  return !!(extractPlaybackUrl(video) || video?.stream?.id || video?.id);
+}
+
 function extractPlaybackUrl(video) {
   const stream = video?.stream || video?.media?.stream || video?.playback || {};
   const candidates = [
@@ -395,10 +401,10 @@ async function fetchPublicVideoContent() {
       if (Array.isArray(payload)) {
         for (const item of payload) {
           const meta = normalizeVideoMeta(item, "public");
-          if (meta) {
-            const exists = items.some((entry) => entry.id === meta.id);
-            if (!exists) items.push(meta);
-          }
+          if (!meta) continue;
+          if (isLiveVideo(item) && !extractPlaybackUrl(item)) continue;
+          const exists = items.some((entry) => entry.id === meta.id);
+          if (!exists) items.push(meta);
         }
       }
     } catch (error) {
@@ -487,9 +493,11 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     };
 
     for (const item of videos) {
-      const haystack = `${item.name || ""} ${item.description || ""} ${item.raw?.author?.username || ""} ${item.raw?.author?.displayName || ""}`.toLowerCase();
+      const raw = item.raw || item;
+      if (isLiveVideo(raw) && !extractPlaybackUrl(raw)) continue;
+      const haystack = `${item.name || ""} ${item.description || ""} ${raw?.author?.username || ""} ${raw?.author?.displayName || ""}`.toLowerCase();
       if (!haystack.includes(q.toLowerCase())) continue;
-      const streamType = isLiveVideo(item.raw || item) ? "live" : item.type === "series" ? "series" : "movie";
+      const streamType = isLiveVideo(raw) ? "live" : item.type === "series" ? "series" : "movie";
       if (type && type !== "other" && type !== "all" && type !== streamType) continue;
       pushResult(item, streamType, item.id);
     }
@@ -542,7 +550,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
   ]);
 
   const mainList = [...publicItems, ...personalItems];
-  const liveItems = publicItems.filter((item) => isLiveVideo(item.raw || item));
+  const liveItems = publicItems.filter((item) => isLiveVideo(item.raw || item) && extractPlaybackUrl(item.raw || item));
   const movieItems = publicItems.filter((item) => !isLiveVideo(item.raw || item));
   const others = [...mainList].slice(0, 60);
 
@@ -824,7 +832,7 @@ app.get("/:token/catalog/live/cinefy_live.json", async (req, res) => {
   if (!validation.valid) return res.status(401).json({ metas: [] });
 
   const publicItems = await fetchPublicVideoContent();
-  const metas = publicItems.filter((item) => item.raw?.liveStream || item.genre === "live").slice(0, 120);
+  const metas = publicItems.filter((item) => isLiveVideo(item.raw || item) && extractPlaybackUrl(item.raw || item)).slice(0, 120);
 
   return res.json({ metas: metas.map((meta) => ({ id: meta.id, type: "live", name: meta.name, poster: meta.poster, background: meta.background, description: meta.description, genres: [meta.genre], languages: ["pt-BR"] })) });
 });
