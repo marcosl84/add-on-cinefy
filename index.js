@@ -818,14 +818,34 @@ app.get("/:token/proxy/hls/:id/playlist.m3u8", async (req, res) => {
     if (!playlistText) return res.status(404).send("#EXTM3U\n");
 
     const baseUrl = await fetchWatchPagePlaybackUrl(videoId, token);
-    const absoluteBase = baseUrl ? new URL(baseUrl).origin + new URL(baseUrl).pathname.replace(/\/[^/]*$/, "/") : "https://t2-videos.cinefy.gg";
+    const signedBase = baseUrl ? new URL(baseUrl) : null;
+    const signedQuery = signedBase?.searchParams?.toString() || "";
+    const fallbackBase = "https://t2-videos.cinefy.gg/";
+
     const rewritten = playlistText
       .split(/\r?\n/)
       .map((line) => {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith("#")) return line;
-        if (/^https?:\/\//i.test(trimmed)) return trimmed;
-        try { return new URL(trimmed, baseUrl || "https://t2-videos.cinefy.gg/").toString(); } catch { return `${absoluteBase}${trimmed.startsWith("/") ? "" : "/"}${trimmed}`; }
+
+        try {
+          const resolved = new URL(trimmed, signedBase || fallbackBase);
+
+          // Cinefy CDN assina a playlist via query string; variantes relativas precisam herdar essa assinatura.
+          if (signedQuery && !resolved.search && signedBase && resolved.host === signedBase.host) {
+            resolved.search = `?${signedQuery}`;
+          }
+
+          return resolved.toString();
+        } catch {
+          if (!signedBase) {
+            return `${fallbackBase.replace(/\/$/, "")}/${trimmed.replace(/^\//, "")}`;
+          }
+
+          const separator = trimmed.includes("?") ? "&" : "?";
+          const querySuffix = signedQuery ? `${separator}${signedQuery}` : "";
+          return `${signedBase.origin}${signedBase.pathname.replace(/\/[^/]*$/, "/")}${trimmed.replace(/^\//, "")}${querySuffix}`;
+        }
       })
       .join("\n");
 
