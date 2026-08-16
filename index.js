@@ -210,6 +210,32 @@ function resolveCreatorName(author, fallback = "Cinefy") {
   return sanitizeText(author.displayName || author.username || author.slug || author.name || author.title || fallback, fallback);
 }
 
+function extractPlaybackUrl(video) {
+  const stream = video?.stream || video?.media?.stream || video?.playback || {};
+  const candidates = [
+    stream?.playbackUrl,
+    stream?.playback_url,
+    stream?.url,
+    stream?.hls,
+    stream?.m3u8,
+    stream?.source,
+    stream?.sourceUrl,
+    video?.playbackUrl,
+    video?.playback_url,
+    video?.sourceUrl,
+    video?.url
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") {
+      const value = candidate.trim();
+      if (value && /^https?:\/\//i.test(value)) return value;
+    }
+  }
+
+  return "";
+}
+
 function normalizeVideoMeta(video, source = "public") {
   const id = String(video?.id || "").trim();
   if (!id) return null;
@@ -242,8 +268,32 @@ function normalizeVideoMeta(video, source = "public") {
     genre: String(genreList[0] || (isLive ? "live" : "general")).trim() || (isLive ? "live" : "general"),
     director: creatorName,
     source,
+    playbackUrl: extractPlaybackUrl(video),
     raw: video
   };
+}
+
+async function fetchVideoDetailById(videoId, token = CINEFY_AUTH_TOKEN) {
+  const id = String(videoId || "").trim();
+  if (!id) return null;
+
+  const authToken = normalizeAuthToken(token);
+  const headers = buildAuthHeaders(authToken || "");
+
+  try {
+    const response = await axios.get(`${CINEFY_API_BASE}/v1/video/${encodeURIComponent(id)}`, {
+      headers,
+      timeout: 20000
+    });
+
+    const payload = response.data || null;
+    if (!payload || typeof payload !== "object") return null;
+
+    return payload;
+  } catch (error) {
+    console.warn("Cinefy video detail fetch failed:", id, error.response?.status || error.message);
+    return null;
+  }
 }
 
 async function fetchPublicVideoContent() {
@@ -424,18 +474,20 @@ builder.defineMetaHandler(async ({ type, id }) => {
 builder.defineStreamHandler(async ({ type, id }) => {
   if (type === "movie" || type === "series" || type === "live") {
     const allItems = await fetchPublicVideoContent();
-    const item = allItems.find((entry) => entry.id === String(id || "") || entry.raw?.id === String(id || "") || `cinefy_video_${entry.raw?.id}` === String(id || ""));
+    const match = allItems.find((entry) => entry.id === String(id || "") || entry.raw?.id === String(id || "") || `cinefy_video_${entry.raw?.id}` === String(id || ""));
+    const watchId = String(id || "").replace(/^cinefy_video_/, "") || match?.raw?.id || "";
+    const detail = watchId ? await fetchVideoDetailById(watchId) : null;
+    const item = match || (detail ? normalizeVideoMeta(detail, "public") : null);
     if (!item) return { streams: [] };
 
-    const watchId = item.raw?.id || String(id || "").replace(/^cinefy_video_/, "");
-    const watchUrl = item.raw?.liveStream ? `https://cinefy.gg/watch/${watchId}` : `https://cinefy.gg/watch/${watchId}`;
+    const playbackUrl = (detail && extractPlaybackUrl(detail)) || item.playbackUrl || extractPlaybackUrl(item.raw) || `https://cinefy.gg/watch/${watchId}`;
 
     return {
       streams: [
         {
           name: item.name,
           description: item.description,
-          url: watchUrl
+          url: playbackUrl
         }
       ]
     };
@@ -682,11 +734,14 @@ app.get("/:token/stream/movie/:id.json", async (req, res) => {
 
   const allItems = await fetchPublicVideoContent();
   const item = allItems.find((entry) => entry.id === String(req.params.id || ""));
-  if (!item) return res.json({ streams: [] });
+  const watchId = String(req.params.id || "").replace(/^cinefy_video_/, "") || item?.raw?.id || "";
+  const detail = watchId ? await fetchVideoDetailById(watchId, token) : null;
+  const resolved = item || (detail ? normalizeVideoMeta(detail, "public") : null);
+  if (!resolved) return res.json({ streams: [] });
 
-  const watchUrl = item.raw?.liveStream ? `https://cinefy.gg/watch/${item.raw.id}` : `https://cinefy.gg/watch/${item.raw?.id || item.id.replace(/^cinefy_video_/, "")}`;
+  const watchUrl = (detail && extractPlaybackUrl(detail)) || resolved.playbackUrl || extractPlaybackUrl(resolved.raw) || `https://cinefy.gg/watch/${watchId}`;
 
-  return res.json({ streams: [{ name: item.name, description: item.description, url: watchUrl }] });
+  return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl }] });
 });
 
 app.get("/:token/stream/series/:id.json", async (req, res) => {
@@ -697,11 +752,14 @@ app.get("/:token/stream/series/:id.json", async (req, res) => {
 
   const allItems = await fetchPublicVideoContent();
   const item = allItems.find((entry) => entry.id === String(req.params.id || ""));
-  if (!item) return res.json({ streams: [] });
+  const watchId = String(req.params.id || "").replace(/^cinefy_video_/, "") || item?.raw?.id || "";
+  const detail = watchId ? await fetchVideoDetailById(watchId, token) : null;
+  const resolved = item || (detail ? normalizeVideoMeta(detail, "public") : null);
+  if (!resolved) return res.json({ streams: [] });
 
-  const watchUrl = item.raw?.liveStream ? `https://cinefy.gg/watch/${item.raw.id}` : `https://cinefy.gg/watch/${item.raw?.id || item.id.replace(/^cinefy_video_/, "")}`;
+  const watchUrl = (detail && extractPlaybackUrl(detail)) || resolved.playbackUrl || extractPlaybackUrl(resolved.raw) || `https://cinefy.gg/watch/${watchId}`;
 
-  return res.json({ streams: [{ name: item.name, description: item.description, url: watchUrl }] });
+  return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl }] });
 });
 
 app.get("/:token/stream/channel/:id.json", async (req, res) => {
