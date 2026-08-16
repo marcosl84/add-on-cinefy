@@ -236,6 +236,44 @@ function extractPlaybackUrl(video) {
   return "";
 }
 
+async function fetchWatchPagePlaybackUrl(videoId, token = CINEFY_AUTH_TOKEN) {
+  const id = String(videoId || "").trim();
+  if (!id) return "";
+
+  const authToken = normalizeAuthToken(token);
+  if (!authToken) return "";
+
+  try {
+    const response = await axios.get(`https://cinefy.gg/watch/${encodeURIComponent(id)}`, {
+      headers: {
+        ...buildAuthHeaders(authToken),
+        Referer: "https://cinefy.gg/",
+        Origin: "https://cinefy.gg",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+      },
+      timeout: 30000,
+      maxRedirects: 5
+    });
+
+    const html = String(response.data || "");
+    const matches = [
+      ...html.matchAll(/https?:\/\/[^\s"'<>]+\.m3u8(?:\?[^\s"'<>]+)?/gi),
+      ...html.matchAll(/https?:\/\/[^\s"'<>]+bcdn_token=[^\s"'<>]+/gi)
+    ];
+
+    for (const match of matches) {
+      const value = String(match[0] || "").trim();
+      if (value && /^https?:\/\//i.test(value)) return value;
+    }
+  } catch (error) {
+    console.warn("Cinefy watch page playback lookup failed:", id, error.response?.status || error.message);
+  }
+
+  return "";
+}
+
 function normalizeVideoMeta(video, source = "public") {
   const id = String(video?.id || "").trim();
   if (!id) return null;
@@ -558,7 +596,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const item = match || (detail ? normalizeVideoMeta(detail, "public") : null);
     if (!item) return { streams: [] };
 
-    const playbackUrl = (detail && extractPlaybackUrl(detail)) || item.playbackUrl || extractPlaybackUrl(item.raw) || `https://cinefy.gg/watch/${watchId}`;
+    const playbackUrl = (detail && extractPlaybackUrl(detail)) || item.playbackUrl || extractPlaybackUrl(item.raw) || (await fetchWatchPagePlaybackUrl(watchId)) || `https://cinefy.gg/watch/${watchId}`;
 
     return {
       streams: [
@@ -567,11 +605,14 @@ builder.defineStreamHandler(async ({ type, id }) => {
           description: item.description,
           url: playbackUrl,
           behaviorHints: {
-            notWebReady: true
-          },
-          headers: {
-            Referer: "https://cinefy.gg/",
-            Origin: "https://cinefy.gg"
+            notWebReady: true,
+            proxyHeaders: {
+              request: {
+                Referer: "https://cinefy.gg/",
+                Origin: "https://cinefy.gg"
+              },
+              response: {}
+            }
           }
         }
       ]
@@ -824,9 +865,9 @@ app.get("/:token/stream/movie/:id.json", async (req, res) => {
   const resolved = item || (detail ? normalizeVideoMeta(detail, "public") : null);
   if (!resolved) return res.json({ streams: [] });
 
-  const watchUrl = (detail && extractPlaybackUrl(detail)) || resolved.playbackUrl || extractPlaybackUrl(resolved.raw) || `https://cinefy.gg/watch/${watchId}`;
+  const watchUrl = (detail && extractPlaybackUrl(detail)) || resolved.playbackUrl || extractPlaybackUrl(resolved.raw) || (await fetchWatchPagePlaybackUrl(watchId, token)) || `https://cinefy.gg/watch/${watchId}`;
 
-  return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl, behaviorHints: { notWebReady: true }, headers: { Referer: "https://cinefy.gg/", Origin: "https://cinefy.gg" } }] });
+  return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl, behaviorHints: { notWebReady: true, proxyHeaders: { request: { Referer: "https://cinefy.gg/", Origin: "https://cinefy.gg" }, response: {} } } }] });
 });
 
 app.get("/:token/stream/series/:id.json", async (req, res) => {
@@ -842,9 +883,9 @@ app.get("/:token/stream/series/:id.json", async (req, res) => {
   const resolved = item || (detail ? normalizeVideoMeta(detail, "public") : null);
   if (!resolved) return res.json({ streams: [] });
 
-  const watchUrl = (detail && extractPlaybackUrl(detail)) || resolved.playbackUrl || extractPlaybackUrl(resolved.raw) || `https://cinefy.gg/watch/${watchId}`;
+  const watchUrl = (detail && extractPlaybackUrl(detail)) || resolved.playbackUrl || extractPlaybackUrl(resolved.raw) || (await fetchWatchPagePlaybackUrl(watchId, token)) || `https://cinefy.gg/watch/${watchId}`;
 
-  return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl, behaviorHints: { notWebReady: true }, headers: { Referer: "https://cinefy.gg/", Origin: "https://cinefy.gg" } }] });
+  return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl, behaviorHints: { notWebReady: true, proxyHeaders: { request: { Referer: "https://cinefy.gg/", Origin: "https://cinefy.gg" }, response: {} } } }] });
 });
 
 app.get("/:token/stream/channel/:id.json", async (req, res) => {
