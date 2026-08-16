@@ -17,6 +17,7 @@ const CINEFY_API_KEY = process.env.CINEFY_API_KEY || "";
 const CINEFY_AUTH_TOKEN_SECRET = process.env.CINEFY_AUTH_TOKEN_SECRET || "change-me";
 const CINEFY_AUTH_HEADER = process.env.CINEFY_AUTH_HEADER || "Authorization";
 const CINEFY_SESSION_HEADER = process.env.CINEFY_SESSION_HEADER || "Cookie";
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://add-on-cinefy.onrender.com";
 const CACHE_DURATION = Number(process.env.CACHE_DURATION || 30) * 1000;
 
 app.set("trust proxy", 1);
@@ -272,6 +273,37 @@ async function fetchWatchPagePlaybackUrl(videoId, token = CINEFY_AUTH_TOKEN) {
   }
 
   return "";
+}
+
+function buildProxyHlsUrl(token, videoId, baseUrl = PUBLIC_BASE_URL) {
+  const safeToken = encodeURIComponent(normalizeAuthToken(token || "") || "");
+  const safeVideoId = encodeURIComponent(String(videoId || "").trim());
+  return `${String(baseUrl || PUBLIC_BASE_URL).replace(/\/$/, "")}/${safeToken}/proxy/hls/${safeVideoId}/playlist.m3u8`;
+}
+
+async function fetchSignedPlaylistText(videoId, token) {
+  const id = String(videoId || "").trim();
+  if (!id) return "";
+
+  const authToken = normalizeAuthToken(token);
+  if (!authToken) return "";
+
+  const directUrl = await fetchWatchPagePlaybackUrl(id, authToken);
+  if (!directUrl) return "";
+
+  const response = await axios.get(directUrl, {
+    headers: {
+      ...buildAuthHeaders(authToken),
+      Referer: "https://cinefy.gg/",
+      Origin: "https://cinefy.gg",
+      Accept: "application/vnd.apple.mpegurl,application/x-mpegURL,*/*",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    },
+    timeout: 30000,
+    responseType: "text"
+  });
+
+  return String(response.data || "");
 }
 
 function normalizeVideoMeta(video, source = "public") {
@@ -596,7 +628,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const item = match || (detail ? normalizeVideoMeta(detail, "public") : null);
     if (!item) return { streams: [] };
 
-    const playbackUrl = (detail && extractPlaybackUrl(detail)) || item.playbackUrl || extractPlaybackUrl(item.raw) || (await fetchWatchPagePlaybackUrl(watchId)) || `https://cinefy.gg/watch/${watchId}`;
+    const playbackUrl = buildProxyHlsUrl(token || process.env.CINEFY_TOKEN || process.env.CINEFY_SESSION_TOKEN || process.env.CINEFY_AUTH_TOKEN || "", watchId, `${req.protocol}://${req.get("host")}`);
 
     return {
       streams: [
@@ -715,6 +747,40 @@ app.get("/:token/manifest.json", async (req, res) => {
   };
 
   return res.json(subManifest);
+});
+
+app.get("/:token/proxy/hls/:id/playlist.m3u8", async (req, res) => {
+  const token = decodeURIComponent(req.params.token || "");
+  const validation = await validateSession(token);
+
+  if (!validation.valid) return res.status(401).send("#EXTM3U\n");
+
+  const videoId = String(req.params.id || "").trim();
+  if (!videoId) return res.status(404).send("#EXTM3U\n");
+
+  try {
+    const playlistText = await fetchSignedPlaylistText(videoId, token);
+    if (!playlistText) return res.status(404).send("#EXTM3U\n");
+
+    const baseUrl = await fetchWatchPagePlaybackUrl(videoId, token);
+    const absoluteBase = baseUrl ? new URL(baseUrl).origin + new URL(baseUrl).pathname.replace(/\/[^/]*$/, "/") : "https://t2-videos.cinefy.gg";
+    const rewritten = playlistText
+      .split(/\r?\n/)
+      .map((line) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) return line;
+        if (/^https?:\/\//i.test(trimmed)) return trimmed;
+        try { return new URL(trimmed, baseUrl || "https://t2-videos.cinefy.gg/").toString(); } catch { return `${absoluteBase}${trimmed.startsWith("/") ? "" : "/"}${trimmed}`; }
+      })
+      .join("\n");
+
+    res.setHeader("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.send(rewritten);
+  } catch (error) {
+    console.warn("Cinefy HLS proxy failed:", videoId, error.response?.status || error.message);
+    res.status(502).send("#EXTM3U\n");
+  }
 });
 
 app.get("/:token/catalog/other/cinefy_main.json", async (req, res) => {
@@ -865,7 +931,7 @@ app.get("/:token/stream/movie/:id.json", async (req, res) => {
   const resolved = item || (detail ? normalizeVideoMeta(detail, "public") : null);
   if (!resolved) return res.json({ streams: [] });
 
-  const watchUrl = (detail && extractPlaybackUrl(detail)) || resolved.playbackUrl || extractPlaybackUrl(resolved.raw) || (await fetchWatchPagePlaybackUrl(watchId, token)) || `https://cinefy.gg/watch/${watchId}`;
+  const watchUrl = buildProxyHlsUrl(token, watchId, `${req.protocol}://${req.get("host")}`);
 
   return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl, behaviorHints: { notWebReady: true, proxyHeaders: { request: { Referer: "https://cinefy.gg/", Origin: "https://cinefy.gg" }, response: {} } } }] });
 });
@@ -883,7 +949,7 @@ app.get("/:token/stream/series/:id.json", async (req, res) => {
   const resolved = item || (detail ? normalizeVideoMeta(detail, "public") : null);
   if (!resolved) return res.json({ streams: [] });
 
-  const watchUrl = (detail && extractPlaybackUrl(detail)) || resolved.playbackUrl || extractPlaybackUrl(resolved.raw) || (await fetchWatchPagePlaybackUrl(watchId, token)) || `https://cinefy.gg/watch/${watchId}`;
+  const watchUrl = buildProxyHlsUrl(token, watchId, `${req.protocol}://${req.get("host")}`);
 
   return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl, behaviorHints: { notWebReady: true, proxyHeaders: { request: { Referer: "https://cinefy.gg/", Origin: "https://cinefy.gg" }, response: {} } } }] });
 });
