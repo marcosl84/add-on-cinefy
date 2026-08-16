@@ -436,6 +436,32 @@ async function fetchRelevantCreators(limit = 20) {
   }
 }
 
+async function fetchAuthorVideos(creatorId, limit = 20) {
+  const id = String(creatorId || "").trim();
+  if (!id) return [];
+
+  try {
+    const response = await axios.get(`${CINEFY_API_BASE}/v1/videos?perPage=${limit}&author=${encodeURIComponent(id)}&sortedOrder=desc&collapse=true`, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+      },
+      timeout: 20000
+    });
+
+    const payload = response.data?.data || [];
+    if (!Array.isArray(payload)) return [];
+
+    return payload
+      .map((entry) => normalizeVideoMeta(entry, "public"))
+      .filter((entry) => entry && !(isLiveVideo(entry.raw || entry) && !extractPlaybackUrl(entry.raw || entry)))
+      .slice(0, limit);
+  } catch (error) {
+    console.warn("Cinefy author videos fetch failed:", id, error.response?.status || error.message);
+    return [];
+  }
+}
+
 async function fetchPersonalVideoContent(token) {
   const authToken = normalizeAuthToken(token || CINEFY_AUTH_TOKEN);
   if (!authToken) return [];
@@ -506,6 +532,11 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
       const haystack = `${channel.name || ""} ${channel.username || ""} ${channel.description || ""}`.toLowerCase();
       if (!haystack.includes(q.toLowerCase())) continue;
       if (type && type !== "other" && type !== "all" && type !== "channel") continue;
+      const authorVideos = await fetchAuthorVideos(channel.id?.replace(/^cinefy_/, "") || channel.slug || channel.username || channel.name, 12);
+      for (const authorVideo of authorVideos) {
+        if (isLiveVideo(authorVideo.raw || authorVideo) && !extractPlaybackUrl(authorVideo.raw || authorVideo)) continue;
+        pushResult(authorVideo, authorVideo.type === "series" ? "series" : authorVideo.type === "live" ? "live" : "movie", authorVideo.id);
+      }
       pushResult({
         id: channel.id,
         name: channel.name,
