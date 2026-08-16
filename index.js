@@ -332,6 +332,27 @@ async function fetchPublicVideoContent() {
   return items;
 }
 
+async function fetchRelevantCreators(limit = 20) {
+  try {
+    const response = await axios.get(`${CINEFY_API_BASE}/v1/creators/relevant?page=1&perPage=${limit}`, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+      },
+      timeout: 20000
+    });
+
+    const payload = response.data?.data || response.data || [];
+    const list = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
+    return list
+      .map((entry) => normalizeCreatorEntry(entry, "Cinefy"))
+      .filter(Boolean);
+  } catch (error) {
+    console.warn("Cinefy creators fetch failed:", error.response?.status || error.message);
+    return [];
+  }
+}
+
 async function fetchPersonalVideoContent(token) {
   const authToken = normalizeAuthToken(token || CINEFY_AUTH_TOKEN);
   if (!authToken) return [];
@@ -360,6 +381,63 @@ async function fetchPersonalVideoContent(token) {
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
   const token = extra?.token || extra?.auth || extra?.session || "";
+  const searchQuery = String(extra?.search || "").trim();
+
+  const searchCatalogEntries = async (q) => {
+    if (!q) return [];
+
+    const [videos, channels] = await Promise.all([
+      fetchPublicVideoContent(),
+      fetchRelevantCreators(24)
+    ]);
+
+    const results = [];
+    const seen = new Set();
+    const pushResult = (entry, kind, extraId = entry.id) => {
+      const key = `${kind}:${String(extraId || entry.id || "")}`.toLowerCase();
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      results.push({
+        id: String(extraId || entry.id || ""),
+        type: kind,
+        name: entry.name,
+        poster: entry.poster || entry.avatar || "",
+        background: entry.background || entry.banner || entry.poster || "",
+        description: entry.description || "",
+        genres: entry.genre ? [entry.genre] : [],
+        languages: ["pt-BR"]
+      });
+    };
+
+    for (const item of videos) {
+      const haystack = `${item.name || ""} ${item.description || ""} ${item.raw?.author?.username || ""} ${item.raw?.author?.displayName || ""}`.toLowerCase();
+      if (!haystack.includes(q.toLowerCase())) continue;
+      const streamType = item.type === "live" ? "live" : item.type === "series" ? "series" : "movie";
+      if (type && type !== "other" && type !== "all" && type !== streamType) continue;
+      pushResult(item, streamType, item.id);
+    }
+
+    for (const channel of channels) {
+      const haystack = `${channel.name || ""} ${channel.username || ""} ${channel.description || ""}`.toLowerCase();
+      if (!haystack.includes(q.toLowerCase())) continue;
+      if (type && type !== "other" && type !== "all" && type !== "channel") continue;
+      pushResult({
+        id: channel.id,
+        name: channel.name,
+        poster: channel.avatar || "",
+        background: channel.banner || "",
+        description: channel.description || "Canal Cinefy",
+        genre: "channel"
+      }, "channel", channel.id);
+    }
+
+    return results.slice(0, 20);
+  };
+
+  if (searchQuery) {
+    const matches = await searchCatalogEntries(searchQuery);
+    return { metas: matches };
+  }
 
   if (type === "channel") {
     const hasValidSession = await validateSession(token);
@@ -487,7 +565,14 @@ builder.defineStreamHandler(async ({ type, id }) => {
         {
           name: item.name,
           description: item.description,
-          url: playbackUrl
+          url: playbackUrl,
+          behaviorHints: {
+            notWebReady: true
+          },
+          headers: {
+            Referer: "https://cinefy.gg/",
+            Origin: "https://cinefy.gg"
+          }
         }
       ]
     };
@@ -576,12 +661,12 @@ app.get("/:token/manifest.json", async (req, res) => {
     version: manifest.version,
     name: "Cinefy",
     catalogs: [
-      { type: "other", id: "cinefy_main", name: "Cinefy", extra: [{ name: "token", options: [] }] },
-      { type: "movie", id: "cinefy_movies", name: "Cinefy - Filmes", extra: [{ name: "token", options: [] }] },
-      { type: "series", id: "cinefy_series", name: "Cinefy - Séries", extra: [{ name: "token", options: [] }] },
-      { type: "live", id: "cinefy_live", name: "Cinefy - Live", extra: [{ name: "token", options: [] }] },
-      { type: "other", id: "cinefy_others", name: "Cinefy - Outros", extra: [{ name: "token", options: [] }] },
-      { type: "channel", id: "cinefy_channels", name: "Cinefy - Canais", extra: [{ name: "token", options: [] }] }
+      { type: "other", id: "cinefy_main", name: "Cinefy", extra: [{ name: "token", options: [] }, { name: "search", isRequired: false }] },
+      { type: "movie", id: "cinefy_movies", name: "Cinefy - Filmes", extra: [{ name: "token", options: [] }, { name: "search", isRequired: false }] },
+      { type: "series", id: "cinefy_series", name: "Cinefy - Séries", extra: [{ name: "token", options: [] }, { name: "search", isRequired: false }] },
+      { type: "live", id: "cinefy_live", name: "Cinefy - Live", extra: [{ name: "token", options: [] }, { name: "search", isRequired: false }] },
+      { type: "other", id: "cinefy_others", name: "Cinefy - Outros", extra: [{ name: "token", options: [] }, { name: "search", isRequired: false }] },
+      { type: "channel", id: "cinefy_channels", name: "Cinefy - Canais", extra: [{ name: "token", options: [] }, { name: "search", isRequired: false }] }
     ],
     resources: ["catalog", "meta", "stream"],
     types: ["movie", "series", "channel", "live", "other"],
@@ -741,7 +826,7 @@ app.get("/:token/stream/movie/:id.json", async (req, res) => {
 
   const watchUrl = (detail && extractPlaybackUrl(detail)) || resolved.playbackUrl || extractPlaybackUrl(resolved.raw) || `https://cinefy.gg/watch/${watchId}`;
 
-  return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl }] });
+  return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl, behaviorHints: { notWebReady: true }, headers: { Referer: "https://cinefy.gg/", Origin: "https://cinefy.gg" } }] });
 });
 
 app.get("/:token/stream/series/:id.json", async (req, res) => {
@@ -759,7 +844,7 @@ app.get("/:token/stream/series/:id.json", async (req, res) => {
 
   const watchUrl = (detail && extractPlaybackUrl(detail)) || resolved.playbackUrl || extractPlaybackUrl(resolved.raw) || `https://cinefy.gg/watch/${watchId}`;
 
-  return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl }] });
+  return res.json({ streams: [{ name: resolved.name, description: resolved.description, url: watchUrl, behaviorHints: { notWebReady: true }, headers: { Referer: "https://cinefy.gg/", Origin: "https://cinefy.gg" } }] });
 });
 
 app.get("/:token/stream/channel/:id.json", async (req, res) => {

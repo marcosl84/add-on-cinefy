@@ -8,37 +8,37 @@
       "type": "other",
       "id": "cinefy_main",
       "name": "Cinefy",
-      "extra": []
+      "extra": [{ "name": "search", "isRequired": false }]
     },
     {
       "type": "movie",
       "id": "cinefy_movies",
       "name": "Cinefy - Filmes",
-      "extra": []
+      "extra": [{ "name": "search", "isRequired": false }]
     },
     {
       "type": "series",
       "id": "cinefy_series",
       "name": "Cinefy - Séries",
-      "extra": []
+      "extra": [{ "name": "search", "isRequired": false }]
     },
     {
       "type": "live",
       "id": "cinefy_live",
       "name": "Cinefy - Live",
-      "extra": []
+      "extra": [{ "name": "search", "isRequired": false }]
     },
     {
       "type": "other",
       "id": "cinefy_others",
       "name": "Cinefy - Outros",
-      "extra": []
+      "extra": [{ "name": "search", "isRequired": false }]
     },
     {
       "type": "channel",
       "id": "cinefy_channels",
       "name": "Cinefy - Canais",
-      "extra": []
+      "extra": [{ "name": "search", "isRequired": false }]
     }
   ],
   "resources": ["catalog", "meta", "stream"],
