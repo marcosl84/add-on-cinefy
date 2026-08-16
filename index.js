@@ -211,6 +211,13 @@ function resolveCreatorName(author, fallback = "Cinefy") {
   return sanitizeText(author.displayName || author.username || author.slug || author.name || author.title || fallback, fallback);
 }
 
+function isLiveVideo(video) {
+  if (!video || typeof video !== "object") return false;
+  const rawType = String(video?.type || video?.media?.type || "").trim().toLowerCase();
+  const rawTags = String(video?.tags || video?.media?.tags || "").trim().toLowerCase();
+  return !!(video?.liveStream || rawType === "live" || rawTags.includes("live") || String(video?.status || "").toLowerCase() === "live");
+}
+
 function extractPlaybackUrl(video) {
   const stream = video?.stream || video?.media?.stream || video?.playback || {};
   const candidates = [
@@ -323,7 +330,7 @@ function normalizeVideoMeta(video, source = "public") {
     video.description || media.overview || title || (source === "personal" ? `Conteúdo recente do usuário autenticado em Cinefy` : `Conteúdo público do Cinefy`),
     source === "personal" ? "Conteúdo recente do usuário autenticado em Cinefy" : "Conteúdo público do Cinefy"
   );
-  const isLive = !!(video?.liveStream || video?.type === "live" || String(video?.tags || "").toLowerCase().includes("live"));
+  const isLive = isLiveVideo(video);
   const contentType = media?.type || video?.type || (isLive ? "live" : "movie");
   const genreList = Array.isArray(media?.genres) && media.genres.length ? media.genres : [video?.genre || (isLive ? "live" : "general")];
 
@@ -482,7 +489,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     for (const item of videos) {
       const haystack = `${item.name || ""} ${item.description || ""} ${item.raw?.author?.username || ""} ${item.raw?.author?.displayName || ""}`.toLowerCase();
       if (!haystack.includes(q.toLowerCase())) continue;
-      const streamType = item.type === "live" ? "live" : item.type === "series" ? "series" : "movie";
+      const streamType = isLiveVideo(item.raw || item) ? "live" : item.type === "series" ? "series" : "movie";
       if (type && type !== "other" && type !== "all" && type !== streamType) continue;
       pushResult(item, streamType, item.id);
     }
@@ -535,8 +542,8 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
   ]);
 
   const mainList = [...publicItems, ...personalItems];
-  const liveItems = publicItems.filter((item) => item.raw?.liveStream || item.genre === "live");
-  const movieItems = publicItems.filter((item) => !(item.raw?.liveStream || item.genre === "live"));
+  const liveItems = publicItems.filter((item) => isLiveVideo(item.raw || item));
+  const movieItems = publicItems.filter((item) => !isLiveVideo(item.raw || item));
   const others = [...mainList].slice(0, 60);
 
   let selected = mainList;
