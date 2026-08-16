@@ -665,16 +665,18 @@ builder.defineMetaHandler(async ({ type, id }) => {
   return { meta: null };
 });
 
-builder.defineStreamHandler(async ({ type, id }) => {
+builder.defineStreamHandler(async ({ type, id, extra }) => {
+  const requestToken = normalizeAuthToken(String(extra?.token || extra?.auth || extra?.session || process.env.CINEFY_TOKEN || process.env.CINEFY_SESSION_TOKEN || process.env.CINEFY_AUTH_TOKEN || "").trim());
+
   if (type === "movie" || type === "series" || type === "live") {
     const allItems = await fetchPublicVideoContent();
     const match = allItems.find((entry) => entry.id === String(id || "") || entry.raw?.id === String(id || "") || `cinefy_video_${entry.raw?.id}` === String(id || ""));
     const watchId = String(id || "").replace(/^cinefy_video_/, "") || match?.raw?.id || "";
-    const detail = watchId ? await fetchVideoDetailById(watchId) : null;
+    const detail = watchId ? await fetchVideoDetailById(watchId, requestToken) : null;
     const item = match || (detail ? normalizeVideoMeta(detail, "public") : null);
     if (!item) return { streams: [] };
 
-    const playbackUrl = buildProxyHlsUrl(token || process.env.CINEFY_TOKEN || process.env.CINEFY_SESSION_TOKEN || process.env.CINEFY_AUTH_TOKEN || "", watchId, `${req.protocol}://${req.get("host")}`);
+    const playbackUrl = buildProxyHlsUrl(requestToken, watchId, PUBLIC_BASE_URL);
 
     return {
       streams: [
@@ -687,7 +689,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
             proxyHeaders: {
               request: {
                 Referer: "https://cinefy.gg/",
-                Origin: "https://cinefy.gg"
+                Origin: "https://cinefy.gg",
+                Authorization: requestToken ? `Bearer ${requestToken}` : undefined
               },
               response: {}
             }
